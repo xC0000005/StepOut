@@ -12,9 +12,14 @@ StepConverter converter;
 #define B1_PIN 2
 #define A2_PIN 4
 #define B2_PIN 5
-#define STEP_PIN 7
-#define DIR_PIN 8
-#define ENABLE_PIN 9
+
+#define STEP_PIN A4
+#define DIR_PIN A5
+#define ENABLE_PIN A3
+
+#define STEP_LED_PIN 10
+#define DIR_LED_PIN 11
+#define ENABLE_LED_PIN 12
 
 void setup() {
   Serial.begin(115200);
@@ -22,5 +27,25 @@ void setup() {
 }
 
 void loop() {
-    converter.report_pattern();
+    pinMode(ENABLE_PIN, OUTPUT);
+    pinMode(STEP_PIN, OUTPUT);
+    pinMode(DIR_PIN, OUTPUT);
+
+    //digitalWrite(ENABLE_PIN, HIGH);
+    bool dir = 0;
+
+    for(;;) {
+        //digitalWrite(DIR_PIN, dir);
+        for (int i = 0; i < 400; i++) {
+            digitalWrite(STEP_PIN, HIGH);
+            delay(2);
+            digitalWrite(STEP_PIN, LOW);
+            delay(2);
+        }
+        if (dir == 0)
+            dir = 1;
+        else
+            dir = 0;
+    }
+    //converter.monitor_and_step();
 }

@@ -3,7 +3,7 @@
 #include "stepconverter.h"
 
 #define SAMPLE_BUFFER_SIZE 512
-#define DIR_ON 0x80
+#define DIR_ON 0x8000
 #define DIR_IS_ON(x) (x & DIR_ON)
 #define WITHOUT_DIR(x) (x & ~DIR_ON)
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
@@ -59,14 +59,14 @@ void StepConverter::init(byte a1_pin, byte b1_pin, byte a2_pin, byte b2_pin, byt
 
     // settup pattern buffers
     // The patterns for forward motion (on my printer) are:
-    this->step_pattern[0] = this->a1_mask | this->a2_mask;                  //  A1    A2   
-    this->step_pattern[1] = this->a1_mask | this->a2_mask | this->b2_mask;  //  A1    A2 B2
-    this->step_pattern[2] = this->a1_mask | this->b2_mask;                  //  A1       B2
-    this->step_pattern[3] = this->a1_mask | this->b1_mask | this->b2_mask;  //  A1 B1    B2
-    this->step_pattern[4] = this->b1_mask | this->b2_mask;                  //     B1    B2
-    this->step_pattern[5] = this->b1_mask | this->a2_mask | this->b2_mask;  //  B1 A2 B2
-    this->step_pattern[6] = this->b1_mask | this->a2_mask;                  //  B1 A2   
-    this->step_pattern[7] = this->a1_mask | this->b1_mask | this->a2_mask;  //  A1 B1 A2   
+    this->step_pattern[0] = this->b1_mask | this->a2_mask;                 //   B1 A2    (20)
+    this->step_pattern[1] = this->b1_mask | this->a2_mask | this->b2_mask; //   B1 A2 B2 (52)
+    this->step_pattern[2] = this->b1_mask | this->b2_mask;                 //   B1    B2 (36)
+    this->step_pattern[3] = this->a1_mask | this->b1_mask | this->b2_mask; //   A1 B1    B2 (44)
+    this->step_pattern[4] = this->a1_mask | this->b2_mask;                 //   A1       B2 (40)
+    this->step_pattern[5] = this->a1_mask | this->a2_mask | this->b2_mask; //   A1    A2 B2 (56)
+    this->step_pattern[6] = this->a1_mask | this->a2_mask;                 //   A1    A2    (24)
+    this->step_pattern[7] = this->a1_mask | this->b1_mask | this->a2_mask; //   A1 B1 A2    (28)
 }
 
 /**
@@ -75,16 +75,23 @@ void StepConverter::init(byte a1_pin, byte b1_pin, byte a2_pin, byte b2_pin, byt
  * either at the start (when we cannot determine a direction)
  * or if a reverse happens and we detect the index is lower.
  */
-byte StepConverter::find_dir_and_pattern(byte pattern) {
-    unsigned int i = 0;
+unsigned short StepConverter::find_dir_and_pattern(byte pattern) {
+    unsigned short i = 0;
     // Pattern has the current step signal.
     // this->step_pattern[move_pattern_index] has the previous one.
     // if the previous pattern matches, dir is on (enabled)
     // If the next pattern matches, dir is off (disabled)
     for (i = 0; i < ARRAY_SIZE(this->step_pattern); i++) {
-        if (this->step_pattern[0] == pattern) {
+        if (this->step_pattern[i] == pattern) {
+            Serial.print("Found pattern Index:");
+            Serial.println(i);
             break;
         }
+    }
+
+    if (i >= ARRAY_SIZE(this->step_pattern)) {
+        Serial.print("Garbage Pattern Skipped:");
+        return -1; // We have no idea.
     }
 
     // if we are moving backwards, it's expected that the next state would be lower.
@@ -95,7 +102,11 @@ byte StepConverter::find_dir_and_pattern(byte pattern) {
     // If using Marlin, setting a higher min pulse may be helpful.
     
     // Handle a dir flip first.
-    int relative_distance = abs(this->move_pattern_index - i); 
+    int relative_distance = abs((i -this->move_pattern_index)); 
+
+    Serial.print("Relative:");
+    Serial.println(relative_distance);
+
     if ( relative_distance == 1) {
         if (this->dir)
             return i;
@@ -107,6 +118,7 @@ byte StepConverter::find_dir_and_pattern(byte pattern) {
     // 1. We don' know our patterns and hit something unexpected. Since I
     // created this off fixed A4988 steppers that's possible.
     // 2. We missed some signals. This shouldn't happen but will.
+    // 3. This is the first run.
 
     return i; // What to do here?
 }
@@ -153,11 +165,16 @@ void StepConverter::perform_stepping(byte pin_status)
         // For each step, compare the expected momement pattern to the found one.
         // if it matches, we just need to step.
         bool matches_expected = (pin_status == this->step_pattern[this->move_pattern_index]);
-        
+        Serial.print("pin_status:");
+        Serial.println(pin_status, BIN);
+
+        Serial.print("expected:");
+        Serial.println(this->step_pattern[this->move_pattern_index], BIN);
+
         if (matches_expected) {
             should_step = true;
             set_output = true;
-
+            Serial.write(this->dir ? '+' : '-');
             // Whether we're stepping forward or backward, get the next pattern.
             next_pattern_index = this->get_next_step_pattern();
         }
@@ -166,26 +183,47 @@ void StepConverter::perform_stepping(byte pin_status)
             // There's a serious problem if we are at the end (or beginning, with DIR enabled) and for some reason miss
             // a signal. The dir index will be lower (or higher) indicating a DIR change. There are things that
             // could be done to adapt to this but all of them have drawbacks and the real solution is "never miss."     
-            byte dir_pattern = find_dir_and_pattern(pin_status);
+            Serial.write('?');
+            unsigned short dir_pattern = find_dir_and_pattern(pin_status);
+
+            if (dir_pattern == (unsigned short)-1) {
+                Serial.println("Unknown pattern, ignoring.");
+                return;
+            }
+
             new_dir = DIR_IS_ON(dir_pattern);
             next_pattern_index = WITHOUT_DIR(dir_pattern);
+            Serial.println(next_pattern_index);
             set_output = true;
 
             if (new_dir != this->dir)
             {
                 should_step = true;
             }
+            Serial.write('*');
+            Serial.write(new_dir ? '+' : '-');
         }
     }
     // set the output. The delay should be configurable, eventually.
     if (set_output) {
+        Serial.write('e');
+        Serial.write(new_enabled ? '1' : '0');
         digitalWrite(this->enable_pin, new_enabled ? HIGH : LOW);
         digitalWrite(this->dir_pin, new_dir ? HIGH : LOW);
+        Serial.write('d');
+        Serial.write(new_dir ? '1' : '0');
+
         if (should_step) {
+            Serial.write('s');
+            Serial.write('1');
             digitalWrite(this->step_pin, HIGH);
             delayMicroseconds(1);
+            Serial.write('0');
             digitalWrite(this->step_pin, LOW);
         }
+
+        Serial.write('\r');
+        Serial.write('\n');
     }
 
     // set our variables
@@ -208,6 +246,83 @@ void StepConverter::run_stepper(void) {
             old_pin_status = pin_status;
         }
     } 
+}
+
+void StepConverter::monitor_and_step(void) {
+    byte pin_status, old_pin_status = -1;
+    byte sample_buffer[SAMPLE_BUFFER_SIZE] = {0};
+    int next_sample = 0;
+    for (;;) {
+        pin_status = /* figure out the right port for config */ PIND & coil_mask;
+
+        if (pin_status != old_pin_status) {
+            sample_buffer[next_sample++] = pin_status;
+            old_pin_status = pin_status;
+        }
+
+        if (next_sample == ARRAY_SIZE(sample_buffer))
+        {
+            break;
+        }
+    }
+
+    Serial.println("Press a key to show setup.");
+    while (!Serial.available()) {};
+    (void)Serial.read();
+
+    // Report samples
+    Serial.println("Mask setup:");
+    Serial.print("A1 Pin:");
+    Serial.println(this->a1_pin);
+    Serial.print("A1 Mask:");
+    Serial.println(this->a1_mask);
+
+    Serial.print("A2 Pin:");
+    Serial.println(this->a2_pin);
+    Serial.print("A2 Mask:");
+    Serial.println(this->a2_mask);
+
+    Serial.print("B1 Pin:");
+    Serial.println(this->b1_pin);
+    Serial.print("B1 Mask:");
+    Serial.println(this->b1_mask);
+
+    Serial.print("B2 Pin:");
+    Serial.println(this->b2_pin);
+    Serial.print("B2 Mask:");
+    Serial.println(this->b2_mask);
+
+    Serial.print("Coil Mask:");
+    Serial.println(this->coil_mask);
+
+    Serial.print("Step Pattern Count:");
+    Serial.println(ARRAY_SIZE(this->step_pattern));
+
+    for (unsigned short k = 0; k < ARRAY_SIZE(this->step_pattern); k++) {
+        Serial.print(k);
+        Serial.print(':');
+        Serial.println(this->step_pattern[k], BIN);
+    }
+
+    Serial.println("Press a key to begin replay.");
+    while (!Serial.available()) {};
+    (void)Serial.read();
+
+    for (int i = 0; i < SAMPLE_BUFFER_SIZE; i++) {
+        unsigned short dir_and_pattern = -1;
+        pin_status = sample_buffer[i];
+        Serial.print(i);
+        Serial.print(':');
+        Serial.println(pin_status, BIN);
+
+        dir_and_pattern = this->find_dir_and_pattern(pin_status);
+
+        if (dir_and_pattern == (unsigned short)-1) {
+            Serial.println("Total Unknown pattern, will be ignored:");
+        } else {
+            this->perform_stepping(pin_status);
+        }
+    }
 }
 
 // determines the step patterns for an event.

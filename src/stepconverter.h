@@ -25,7 +25,7 @@ class StepConverter
     StepConverter() {
       this->dir = 0;
       this->enabled = false;
-      this->move_pattern_index = -1;
+      this->move_pattern_index = 0;
     };
 
     // Initialize the step converter
@@ -36,9 +36,12 @@ class StepConverter
 
     // Use to record step patterns that don't match existing.
     void report_pattern(void);
+    
+    // for diagnosis.
+    void monitor_and_step(void);
 
   private:
     byte get_next_step_pattern(void);
-    byte find_dir_and_pattern(byte pattern);
+    unsigned short find_dir_and_pattern(byte pattern);
     void perform_stepping(byte pin_status);
 };
